@@ -1,15 +1,7 @@
 #import "ProcessHelper.h"
+#include <mach/mach.h>
 #include <sys/sysctl.h>
 #include <sys/types.h>
-#include <stdlib.h>
-
-// Thử include libproc.h nếu có (cho phép lấy pid chính xác hơn)
-#if __has_include(<libproc.h>)
-    #include <libproc.h>
-    #define HAS_LIBPROC 1
-#else
-    #define HAS_LIBPROC 0
-#endif
 
 @implementation RunningProcessInfo
 @end
@@ -19,75 +11,45 @@
 + (NSArray<RunningProcessInfo *> *)runningProcesses {
     NSMutableArray *list = [NSMutableArray array];
     
-#if HAS_LIBPROC
-    // Phương pháp dùng proc_listallpids (ưu tiên vì đáng tin cậy trên iOS)
-    int numberOfProcesses = proc_listallpids(NULL, 0);
-    if (numberOfProcesses <= 0) {
-        // fallback sang sysctl nếu lỗi
-        goto fallback_sysctl;
-    }
-    
-    pid_t *pids = (pid_t *)malloc(sizeof(pid_t) * numberOfProcesses);
-    numberOfProcesses = proc_listallpids(pids, numberOfProcesses * sizeof(pid_t));
-    if (numberOfProcesses <= 0) {
-        free(pids);
-        goto fallback_sysctl;
-    }
-    
-    int count = numberOfProcesses / sizeof(pid_t); // thực tế trả về số byte
-    // proc_listallpids trả về số byte đã ghi, cần chia cho sizeof(pid_t) để có số pid
-    count = numberOfProcesses / sizeof(pid_t);
-    for (int i = 0; i < count; i++) {
-        pid_t pid = pids[i];
-        if (pid == 0) continue;
-        
-        char name[PROC_PIDPATHINFO_MAXSIZE] = {0};
-        if (proc_pidpath(pid, name, sizeof(name)) > 0) {
+    // Phương pháp mới: duyệt tất cả PID khả dĩ, dùng task_for_pid để kiểm tra sự tồn tại
+    // Do có entitlement task_for_pid-allow, ta có thể lấy task port của tiến trình khác
+    for (pid_t pid = 1; pid < 65536; pid++) {
+        mach_port_t task = MACH_PORT_NULL;
+        kern_return_t kr = task_for_pid(mach_task_self_, pid, &task);
+        if (kr == KERN_SUCCESS) {
+            // Nếu lấy được task port, PID đó tồn tại và ta có quyền truy cập
+            // Giải phóng task port ngay vì không cần giữ
+            mach_port_deallocate(mach_task_self_, task);
+            
+            // Lấy tên tiến trình
+            char name[PROC_PIDPATHINFO_MAXSIZE] = {0};
+            NSString *procName = nil;
+            // Dùng proc_pidpath nếu có (từ libproc)
+#if __has_include(<libproc.h>)
+            if (proc_pidpath(pid, name, sizeof(name)) > 0) {
+                procName = [NSString stringWithUTF8String:name];
+            }
+#endif
+            // Nếu không lấy được đường dẫn, dùng tên ngắn từ sysctl
+            if (procName == nil) {
+                struct kinfo_proc kp;
+                size_t len = sizeof(kp);
+                int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+                if (sysctl(mib, 4, &kp, &len, NULL, 0) == 0) {
+                    procName = [NSString stringWithUTF8String:kp.kp_proc.p_comm];
+                } else {
+                    procName = [NSString stringWithFormat:@"PID %d", pid];
+                }
+            }
+            
             RunningProcessInfo *info = [[RunningProcessInfo alloc] init];
             info.pid = pid;
-            info.name = [NSString stringWithUTF8String:name];
+            info.name = procName;
             [list addObject:info];
-        } else {
-            // Nếu không lấy được đường dẫn, dùng tên ngắn từ sysctl
-            struct kinfo_proc kp;
-            size_t len = sizeof(kp);
-            int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
-            if (sysctl(mib, 4, &kp, &len, NULL, 0) == 0) {
-                RunningProcessInfo *info = [[RunningProcessInfo alloc] init];
-                info.pid = pid;
-                info.name = [NSString stringWithUTF8String:kp.kp_proc.p_comm];
-                [list addObject:info];
-            }
         }
-    }
-    free(pids);
-    return list;
-    
-fallback_sysctl:
-#endif
-
-    // Fallback: dùng sysctl (có thể bị giới hạn trên iOS 15+)
-    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
-    size_t size;
-    if (sysctl(mib, 4, NULL, &size, NULL, 0) < 0) return list;
-    
-    struct kinfo_proc *procs = (struct kinfo_proc *)malloc(size);
-    if (sysctl(mib, 4, procs, &size, NULL, 0) < 0) {
-        free(procs);
-        return list;
+        // Nếu kr != KERN_SUCCESS, bỏ qua PID này (không tồn tại hoặc không có quyền)
     }
     
-    int count = (int)(size / sizeof(struct kinfo_proc));
-    for (int i = 0; i < count; i++) {
-        struct kinfo_proc *proc = &procs[i];
-        if (proc->kp_proc.p_pid == 0) continue;
-        
-        RunningProcessInfo *info = [[RunningProcessInfo alloc] init];
-        info.pid = proc->kp_proc.p_pid;
-        info.name = [NSString stringWithUTF8String:proc->kp_proc.p_comm];
-        [list addObject:info];
-    }
-    free(procs);
     return list;
 }
 

@@ -22,12 +22,12 @@ targets:
     sources:
       - path: CheatEngine
         excludes:
-          - "Info.plist"  # We specify it separately
+          - "Info.plist"
     settings:
       base:
         INFOPLIST_FILE: CheatEngine/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.example.CheatEngine
-        SWIFT_OBJC_BRIDGING_HEADER: CheatEngine/Bridging-Header.h
+        SWIFT_OBJC_BRIDGING_HEADER: "$(PROJECT_DIR)/Bridging-Header.h"
         CODE_SIGN_ENTITLEMENTS: CheatEngine/cheatengine.entitlements
     info:
       path: CheatEngine/Info.plist

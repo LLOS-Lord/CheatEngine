@@ -18,11 +18,20 @@ jobs:
         with:
           xcode-version: '16.0'
 
-      - name: Clean previous Xcode project (if exists)
+      - name: Clean previous Xcode project
         run: rm -rf CheatEngine.xcodeproj
 
+      # Tạo thư mục tạm riêng để tránh xung đột file XcodeGen
+      - name: Prepare temporary directory for XcodeGen
+        run: |
+          mkdir -p /tmp/xcodegen-tmp
+          export TMPDIR=/tmp/xcodegen-tmp
+
       - name: Generate Xcode project
-        run: xcodegen generate --no-cache
+        run: |
+          export TMPDIR=/tmp/xcodegen-tmp
+          xcodegen generate
+        # Không dùng --no-cache, cache mặc định tắt
 
       - name: Build Archive
         run: |

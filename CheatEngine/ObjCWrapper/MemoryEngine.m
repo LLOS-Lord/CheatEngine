@@ -1,6 +1,6 @@
 #import "MemoryEngine.h"
-#import <mach/mach_vm.h>
-#import <stdlib.h>
+#include <mach/vm_map.h>
+#include <stdlib.h>
 
 @implementation MemoryResult
 @end
@@ -15,24 +15,23 @@
                                          dataType:(ScanDataType)type
                                      targetValue:(id)value {
     NSMutableArray *results = [NSMutableArray array];
-    mach_vm_address_t address = 1; // bắt đầu từ 1, tránh NULL
-    mach_vm_size_t size;
+    vm_address_t address = 1;
+    vm_size_t size;
     vm_region_basic_info_data_64_t info;
     mach_msg_type_number_t info_count = VM_REGION_BASIC_INFO_COUNT_64;
     mach_port_t object_name = MACH_PORT_NULL;
     kern_return_t kr;
 
     while (true) {
-        kr = mach_vm_region(task, &address, &size, VM_REGION_BASIC_INFO_64,
-                            (vm_region_info_t)&info, &info_count, &object_name);
+        kr = vm_region_64(task, &address, &size, VM_REGION_BASIC_INFO_64,
+                          (vm_region_info_t)&info, &info_count, &object_name);
         if (kr != KERN_SUCCESS) break;
 
-        // Chỉ đọc nếu vùng có quyền đọc và không phải guard/reserved
-        if (info.protection & VM_PROT_READ && !(info.protection & VM_PROT_WRITE) == NO) {
+        if (info.protection & VM_PROT_READ) {
             size_t data_size = (size_t)size;
             uint8_t *buffer = (uint8_t *)malloc(data_size);
-            mach_vm_size_t bytes_read = 0;
-            kr = mach_vm_read_overwrite(task, address, size, (mach_vm_address_t)buffer, &bytes_read);
+            vm_size_t bytes_read = 0;
+            kr = vm_read_overwrite(task, address, size, (vm_address_t)buffer, &bytes_read);
             if (kr == KERN_SUCCESS && bytes_read > 0) {
                 [self scanBuffer:buffer length:bytes_read baseAddress:address
                          dataType:type targetValue:value intoResults:results];
@@ -44,13 +43,13 @@
     return results;
 }
 
-+ (void)scanBuffer:(const uint8_t *)buffer length:(size_t)length baseAddress:(mach_vm_address_t)base
++ (void)scanBuffer:(const uint8_t *)buffer length:(size_t)length baseAddress:(vm_address_t)base
           dataType:(ScanDataType)type targetValue:(id)value intoResults:(NSMutableArray *)results {
     size_t step = 0;
     switch (type) {
         case ScanDataTypeInt32: step = sizeof(int32_t); break;
         case ScanDataTypeFloat: step = sizeof(float); break;
-        case ScanDataTypeString: step = 1; break; // sẽ xử lý riêng
+        case ScanDataTypeString: step = 1; break;
     }
     if (type != ScanDataTypeString) {
         for (size_t i = 0; i + step <= length; i++) {
@@ -73,7 +72,6 @@
             }
         }
     } else {
-        // Tìm chuỗi UTF-8
         const char *search = [value UTF8String];
         size_t searchLen = strlen(search);
         for (size_t i = 0; i + searchLen <= length; i++) {
@@ -90,13 +88,13 @@
 + (kern_return_t)writeInt32ToTask:(mach_port_t)task
                           address:(mach_vm_address_t)address
                              value:(int32_t)newValue {
-    return mach_vm_write(task, address, (vm_offset_t)&newValue, sizeof(newValue));
+    return vm_write(task, (vm_address_t)address, (vm_offset_t)&newValue, sizeof(newValue));
 }
 
 + (kern_return_t)writeFloatToTask:(mach_port_t)task
                            address:(mach_vm_address_t)address
                              value:(float)newValue {
-    return mach_vm_write(task, address, (vm_offset_t)&newValue, sizeof(newValue));
+    return vm_write(task, (vm_address_t)address, (vm_offset_t)&newValue, sizeof(newValue));
 }
 
 @end
